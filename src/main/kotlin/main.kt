@@ -1,4 +1,5 @@
 import kotlinx.coroutines.experimental.GlobalScope
+import kotlinx.coroutines.experimental.asCoroutineDispatcher
 import kotlinx.coroutines.experimental.launch
 import org.telegram.telegrambots.ApiContextInitializer
 import org.telegram.telegrambots.bots.TelegramLongPollingBot
@@ -8,6 +9,7 @@ import org.telegram.telegrambots.meta.api.methods.send.SendPhoto
 import org.telegram.telegrambots.meta.api.objects.Message
 import org.telegram.telegrambots.meta.api.objects.Update
 import java.io.File
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 fun main(args: Array<String>) {
@@ -17,12 +19,17 @@ fun main(args: Array<String>) {
     api.registerBot(LaTeXBot())
 }
 
+private val tempDirThreadDispatcher = Executors.newFixedThreadPool(
+        Runtime.getRuntime().availableProcessors() - 1, ::TempDirThread).asCoroutineDispatcher()
+
+class TempDirThread(target: Runnable) : Thread(target) {
+    val tmpDir = createTempDir()
+    val latexFile = File(tmpDir, "main.tex")
+    val outputFile = File(tmpDir, "main.png")
+}
+
 
 class LaTeXBot : TelegramLongPollingBot() {
-    private val tmpDir = createTempDir()
-    private val latexFile = File(tmpDir, "main.tex")
-    private val outputFile = File(tmpDir, "main.png")
-
     private val template = LaTeXBot::class.java.getResource("/template.tex").readText()
     private val userWhitelist = System.getenv("USER_WHITELIST").split(",").map { it.toInt() }.toSet()
 
@@ -44,35 +51,36 @@ class LaTeXBot : TelegramLongPollingBot() {
     }
 
     private fun process(message: Message, code: String) {
-        GlobalScope.launch {
-            execute(SendChatAction(message.chatId, "upload_photo"))
-        }
-
-        latexFile.writer().use {
-            it.write(template)
-            it.write(code)
-            it.write("\n\\end{document}")
-        }
-
-        try {
-            val compilation = ProcessBuilder("pdflatex", "-interaction=nonstopmode", latexFile.name)
-                    .directory(tmpDir)
-                    .inheritIO().start()
-            compilation.waitFor(20, TimeUnit.SECONDS)
-
-            if (compilation.exitValue() == 0) {
-                ProcessBuilder("convert", "-density", "300", "main.pdf", "-quality", "90", "main.png")
-                        .directory(tmpDir)
-                        .inheritIO().start()
-                        .waitFor(10, TimeUnit.SECONDS)
-
-                execute(SendPhoto()
-                        .setChatId(message.chatId)
-                        .setPhoto(outputFile)
-                        .setReplyToMessageId(message.messageId))
+        GlobalScope.launch(tempDirThreadDispatcher) {
+            val thread = Thread.currentThread() as TempDirThread
+            thread.latexFile.writer().use {
+                it.write(template)
+                it.write(code)
+                it.write("\n\\end{document}")
             }
-        } catch (e: InterruptedException) {
+
+            try {
+                val compilation = ProcessBuilder("pdflatex", "-interaction=nonstopmode", thread.latexFile.name)
+                        .directory(thread.tmpDir)
+                        .inheritIO().start()
+                compilation.waitFor(20, TimeUnit.SECONDS)
+
+                if (compilation.exitValue() == 0) {
+                    ProcessBuilder("convert", "-density", "300", "main.pdf", "-quality", "90", "main.png")
+                            .directory(thread.tmpDir)
+                            .inheritIO().start()
+                            .waitFor(10, TimeUnit.SECONDS)
+
+                    execute(SendPhoto()
+                            .setChatId(message.chatId)
+                            .setPhoto(thread.outputFile)
+                            .setReplyToMessageId(message.messageId))
+                }
+            } catch (e: InterruptedException) {
+            }
         }
+
+        execute(SendChatAction(message.chatId, "upload_photo"))
     }
 
     override fun getBotToken() = System.getenv("BOT_TOKEN")
