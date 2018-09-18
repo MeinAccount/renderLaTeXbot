@@ -28,11 +28,11 @@ task dockerCreateDockerfile(type: Dockerfile, dependsOn: [jar, installDist]) {
     runCommand('apt-get update && apt-get install -y texlive texlive-extra-utils texlive-fonts-extra ' +
             'texlive-lang-german texlive-latex-extra imagemagick')
 
-    addFile({ installDist.destinationDir.name }, { "/${installDist.destinationDir.name}" })
-    addFile({ "app-lib/${jar.archiveName}" }, { "/${installDist.destinationDir.name}/lib/${jar.archiveName}" })
-    addFile("res", "/root/texmf/tex/latex/local/")
-
     defaultCommand("/renderLaTeXbot/bin/renderLaTeXbot")
+    addFile({ installDist.destinationDir.name }, { "/${installDist.destinationDir.name}" })
+
+    addFile("res", "/root/texmf/tex/latex/local/")
+    addFile({ "app-lib/${jar.archiveName}" }, { "/${installDist.destinationDir.name}/lib/${jar.archiveName}" })
 }
 
 task dockerCopyDist(type: Sync, dependsOn: [jar, installDist]) {
@@ -44,7 +44,7 @@ task dockerCopyDist(type: Sync, dependsOn: [jar, installDist]) {
 }
 dockerCreateDockerfile.dependsOn(dockerCopyDist)
 
-task dockerCopyRes(type:Sync) {
+task dockerCopyRes(type: Sync) {
     from 'res'
     into new File(dockerCreateDockerfile.destFile.parentFile, 'res')
 }
